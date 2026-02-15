@@ -2,31 +2,44 @@ import os
 import random
 import requests
 import streamlit as st
-from moviepy.editor import *
+import imageio_ffmpeg
+import moviepy.editor as mp  # MoviePy import
 from openai import OpenAI
 
+# MoviePy konfigurieren, damit es die portable FFmpeg-Binary nutzt
+mp.config.change_settings({"FFMPEG_BINARY": imageio_ffmpeg.get_ffmpeg_exe()})
+
+# Streamlit Setup
 st.set_page_config(page_title="CoreCore Cloud Factory", layout="centered")
 st.title("🎬 CoreCore Cloud Factory")
 
+# API Keys und Eingaben
 pexels_key = st.text_input("Pexels API Key", type="password")
 openai_key = st.text_input("OpenAI API Key", type="password")
 query = st.text_input("Suchbegriff", value="city night lonely")
 uploaded_music = st.file_uploader("Ambient / LoFi Musik hochladen (mp3)", type=["mp3"])
 
+# -----------------------------------
+# Funktionen
+# -----------------------------------
+
 def fetch_videos(query, api_key):
+    """Lade URLs von Videos aus Pexels"""
     url = f"https://api.pexels.com/videos/search?query={query}&per_page=5"
     headers = {"Authorization": api_key}
     response = requests.get(url, headers=headers).json()
     return [v["video_files"][0]["link"] for v in response["videos"]]
 
 def download_video(url, filename):
+    """Download Video"""
     r = requests.get(url)
     with open(filename, "wb") as f:
         f.write(r.content)
     return filename
 
 def extract_clip(path):
-    clip = VideoFileClip(path)
+    """Schneidet 2-4 Sekunden Clip zufällig aus dem Video"""
+    clip = mp.VideoFileClip(path)
     if clip.duration < 4:
         return None
     start = random.uniform(0, clip.duration - 4)
@@ -34,6 +47,7 @@ def extract_clip(path):
     return clip.subclip(start, end)
 
 def generate_text(api_key):
+    """Erstellt 3 kurze CoreCore-Sätze über GPT"""
     client = OpenAI(api_key=api_key)
     prompt = """
     Schreibe 3 minimalistische, melancholische Core-Core Sätze
@@ -47,6 +61,7 @@ def generate_text(api_key):
     return response.choices[0].message.content.split("\n")
 
 def build_video(clips, text_lines, music_path):
+    """Setzt Video + Text + Musik zusammen"""
     total = 0
     selected = []
 
@@ -56,26 +71,33 @@ def build_video(clips, text_lines, music_path):
         selected.append(c)
         total += c.duration
 
-    video = concatenate_videoclips(selected, method="compose")
-    audio = AudioFileClip(music_path).subclip(0, video.duration)
+    video = mp.concatenate_videoclips(selected, method="compose")
+    audio = mp.AudioFileClip(music_path).subclip(0, video.duration)
     video = video.set_audio(audio.volumex(0.6))
 
     txt_clips = []
     for i, line in enumerate(text_lines):
-        txt = TextClip(line, fontsize=60, color='white')
+        txt = mp.TextClip(line, fontsize=60, color='white')
         txt = txt.set_position("center").set_duration(4).set_start(i*8)
         txt_clips.append(txt)
 
-    final = CompositeVideoClip([video, *txt_clips])
+    final = mp.CompositeVideoClip([video, *txt_clips])
     output_path = "corecore_output.mp4"
     final.write_videofile(output_path, fps=24)
+
     return output_path
+
+# -----------------------------------
+# Streamlit Button
+# -----------------------------------
 
 if st.button("🎬 Generate Video"):
     if not all([pexels_key, openai_key, uploaded_music]):
         st.error("Bitte alle Felder ausfüllen.")
     else:
         with st.spinner("Erstelle dein CoreCore Video..."):
+
+            # Videos laden
             urls = fetch_videos(query, pexels_key)
             clips = []
             for i, url in enumerate(urls):
@@ -83,10 +105,18 @@ if st.button("🎬 Generate Video"):
                 clip = extract_clip(video_path)
                 if clip:
                     clips.append(clip)
+
+            # CoreCore-Sätze generieren
             text_lines = generate_text(openai_key)
+
+            # Musik speichern
             with open("music.mp3", "wb") as f:
                 f.write(uploaded_music.read())
+
+            # Video bauen
             output_path = build_video(clips, text_lines, "music.mp3")
+
+            # Download Button
             with open(output_path, "rb") as f:
                 st.download_button(
                     label="⬇️ Download Video",
@@ -94,4 +124,5 @@ if st.button("🎬 Generate Video"):
                     file_name="corecore_video.mp4",
                     mime="video/mp4"
                 )
+
             st.success("Fertig!")
